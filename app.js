@@ -153,13 +153,13 @@ async function pageLive(el) {
     const pts = [];
     d.data.forEach(x => {
       pts.push([x.lat, x.lng]);
-      L.circleMarker([x.lat, x.lng], { radius: 9, color: '#0b7a5a', fillColor: '#2bb98a', fillOpacity: .9 })
+      L.circleMarker([x.lat, x.lng], { radius: 9, color: '#4f1c79', fillColor: '#8a55c9', fillOpacity: .9 })
         .bindPopup(`<b>${esc(x.full_name || 'Driver')}</b><br>${esc(VEHICLES[x.vehicle_type] || '')} ${esc(x.plate || '')}<br>${esc(x.phone || '')}<br><small>Updated ${esc(dt(x.updated_at))}</small>`)
         .addTo(layer);
     });
     t.data.forEach(x => {
       pts.push([x.lat, x.lng]);
-      L.circleMarker([x.lat, x.lng], { radius: 8, color: '#b7791f', fillColor: '#f0b429', fillOpacity: .9 })
+      L.circleMarker([x.lat, x.lng], { radius: 8, color: '#b58900', fillColor: '#f5c405', fillOpacity: .9 })
         .bindPopup(`<b>Trip pickup</b><br>${esc(TRIP_STATUS[x.status] || x.status)} (${esc(VEHICLES[x.vehicle] || '')})<br>${esc(x.pickup_address || '')}`)
         .addTo(layer);
     });
@@ -463,12 +463,12 @@ async function pageBalances(el) {
 
 // ---- Reports ---------------------------------------------------------------
 async function pageReports(el) {
-  el.innerHTML = `<div class="bar"><h1>Reports</h1><input id="m" type="month" value="${colomboToday().slice(0, 7)}"></div><div id="out"></div>`;
+  el.innerHTML = `<div class="bar"><h1>Reports</h1><input id="m" type="month" value="${colomboToday().slice(0, 7)}"></div><div id="rep"></div>`;
   const run = async () => {
     const ym = $('#m').value;
     if (!ym) return;
     const [a, b] = monthRange(ym);
-    $('#out').innerHTML = '<p class="muted">Loading…</p>';
+    $('#rep').innerHTML = '<p class="muted">Loading…</p>';
     try {
       const [trips, stm] = await Promise.all([
         fetchAll(() => sb.from('trips').select('id,status,vehicle,total_fare,commission_amount,driver:drivers(profiles(full_name))')
@@ -491,7 +491,7 @@ async function pageReports(el) {
 
       const S = stm.data;
       const billed = sum(S, s => s.total_due), collected = sum(S, s => sum(s.payments, p => p.amount));
-      $('#out').innerHTML = `<div class="cards">
+      $('#rep').innerHTML = `<div class="cards">
           ${stat(trips.length, 'Trip requests')}
           ${stat(done.length, 'Completed')}
           ${stat(count(t => t.status.startsWith('cancelled')), 'Cancelled')}
@@ -508,7 +508,7 @@ async function pageReports(el) {
         </div>` : '<p class="muted">Statements for this month are issued at the start of next month.</p>'}
         <h2>By vehicle type (completed trips)</h2>${table(['Vehicle', '#Trips', '#Cash fares', '#Commission'], byVeh)}
         <h2>Top drivers</h2>${table(['Driver', '#Trips', '#Cash fares', '#Commission'], byDrv)}`;
-    } catch (e) { $('#out').innerHTML = `<p class="err">${esc(e.message || e)}</p>`; }
+    } catch (e) { $('#rep').innerHTML = `<p class="err">${esc(e.message || e)}</p>`; }
   };
   $('#m').onchange = run;
   await run();
@@ -604,10 +604,10 @@ function showApp() {
   $('#boot').hidden = true;
   $('#login').hidden = true;
   $('#app').hidden = false;
-  $('#nav').innerHTML = `<div class="brand">GoEmb<small>Admin</small></div>` +
+  $('#nav').innerHTML = `<div class="brand"><img class="logo-full" src="logo.jpg" alt="GoEmb"><img class="logo-icon" src="icon.png" alt="GoEmb"></div>` +
     PAGES.map(p => `<a href="#${p[0]}" data-id="${p[0]}">${p[1]}</a>`).join('') +
-    `<div class="who">${esc(state.profile.full_name || state.profile.role)}<button id="out" class="link">Sign out</button></div>`;
-  $('#out').onclick = async () => { await sb.auth.signOut(); location.hash = ''; location.reload(); };
+    `<div class="who">${esc(state.profile.full_name || state.profile.role)}<button id="signout" class="link">Sign out</button></div>`;
+  $('#signout').onclick = async () => { await sb.auth.signOut(); location.hash = ''; location.reload(); };
   route();
 }
 
