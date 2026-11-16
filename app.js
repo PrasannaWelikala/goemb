@@ -23,6 +23,10 @@ const TRIP_STATUS = {
   cancelled_by_driver: 'Cancelled (driver)', no_drivers: 'No drivers'
 };
 const ACTIVE = ['requested', 'accepted', 'arrived', 'in_progress'];
+const LOADING_STATUS = { none: 'Driver has not quoted yet', proposed: 'Waiting for the customer to confirm', confirmed: 'Confirmed by the customer', declined: 'Declined by the customer' };
+const loadingText = t => (LOADING_STATUS[t.loading_status] || '-') +
+  (t.loading_amount != null ? ' (driver quoted ' + money(t.loading_amount) + ')' : '') +
+  (t.status === 'completed' ? ', charged ' + money(t.loading_charge) : '');
 const badge = (text, kind = '') => `<span class="badge ${kind}">${esc(text)}</span>`;
 const tripBadge = s => badge(TRIP_STATUS[s] || s, s === 'completed' ? 'ok' : ACTIVE.includes(s) ? 'warn' : 'bad');
 const isAdmin = () => !!state.profile && state.profile.role === 'admin';
@@ -354,7 +358,7 @@ function tripDetail(t) {
     ${row('Estimate', t.est_fare != null ? money(t.est_fare) + ' (' + Number(t.est_distance_km || 0).toFixed(1) + ' km)' : '-')}
     ${row('Distance / time', t.distance_km != null ? Number(t.distance_km).toFixed(1) + ' km, ' + Number(t.duration_min || 0).toFixed(0) + ' min' : '-')}
     ${row('Fare', t.fare != null ? money(t.fare) : '-')}
-    ${row('Loading charge', money(t.loading_charge))}
+    ${t.loading_requested ? row('Loading help', esc(loadingText(t))) : ''}
     ${row('Total (cash)', t.total_fare != null ? '<b>' + money(t.total_fare) + '</b>' : '-')}
     ${row('Commission', t.status === 'completed' ? money(t.commission_amount) + ' (' + esc(t.commission_plan) + ' plan)' : '-')}
     ${row('Driver rating', t.driver_rating ? esc(t.driver_rating) + ' / 5 ' + esc(t.rating_comment || '') : '-')}
@@ -523,11 +527,10 @@ async function pageFares(el) {
   const dis = isAdmin() ? '' : 'disabled';
   const inp = (r, k) => `<input data-k="${k}" type="number" min="0" step="0.01" value="${esc(r[k])}" style="width:7rem" ${dis}>`;
   el.innerHTML = `<div class="bar"><h1>Fares</h1></div>
-    <p class="muted">Fare = the larger of the minimum fare and (base + per km x distance + per minute x time). Small lorry adds the loading charge when the customer asks for loading help. A vehicle type is offered to customers only while Active is ticked.</p>
-    <div class="tw"><table><thead><tr><th>Vehicle</th><th>Base fare</th><th>Per km</th><th>Per minute</th><th>Minimum fare</th><th>Loading charge</th><th>Active</th><th></th></tr></thead><tbody>
+    <p class="muted">Fare = the larger of the minimum fare and (base + per km x distance + per minute x time). The loading charge for small lorries is not set here: the driver names it on each trip and the customer confirms it. A vehicle type is offered to customers only while Active is ticked.</p>
+    <div class="tw"><table><thead><tr><th>Vehicle</th><th>Base fare</th><th>Per km</th><th>Per minute</th><th>Minimum fare</th><th>Active</th><th></th></tr></thead><tbody>
     ${data.map(r => `<tr data-v="${esc(r.vehicle)}"><td><b>${esc(VEHICLES[r.vehicle])}</b></td>
       <td>${inp(r, 'base_fare')}</td><td>${inp(r, 'per_km')}</td><td>${inp(r, 'per_min')}</td><td>${inp(r, 'min_fare')}</td>
-      <td>${r.vehicle === 'small_lorry' ? inp(r, 'loading_charge') : '<span class="muted">-</span>'}</td>
       <td><input data-k="active" type="checkbox" ${r.active ? 'checked' : ''} ${dis}></td>
       <td>${isAdmin() ? '<button class="primary" data-save>Save</button>' : ''}</td></tr>`).join('')}
     </tbody></table></div>`;
@@ -545,33 +548,62 @@ async function pageFares(el) {
 
 // ---- Billing settings ------------------------------------------------------
 async function pageSettings(el) {
-  const { data, error } = await sb.from('billing_settings').select('*').single();
+  const { data, error } = await sb.from('billing_settings').select('*');
   if (error) throw error;
+  const byVehicle = Object.fromEntries(data.map(r => [r.vehicle, r]));
+  const vehicles = Object.keys(VEHICLES);
+  const missing = vehicles.filter(v => !byVehicle[v]);
+  // [column, label, hint, step, may be empty, whole numbers only, smallest allowed value]
   const F = [
-    ['commission_percent', 'Commission per trip (%)', 'Percentage plan: taken from each trip fare. Required before trips can complete.', '0.01', true],
-    ['subscription_fee', 'Monthly subscription fee (Rs.)', 'Subscription plan: flat fee billed at month end. Required if any driver uses it.', '0.01', true],
-    ['credit_limit', 'Credit limit (Rs.)', 'A driver is blocked when the unpaid amount goes above this. Leave empty for no limit.', '0.01', true],
-    ['payment_days', 'Payment days', 'Days a driver has to pay after a statement is issued.', '1', false],
-    ['grace_days', 'Grace days', 'Extra days after the due date before the driver is blocked.', '1', false],
-    ['search_radius_m', 'Search radius (metres)', 'How far from the pickup to look for drivers.', '100', false],
-    ['offer_timeout_s', 'Request timeout (seconds)', 'Time drivers have to accept before the request shows "no drivers".', '5', false],
-    ['max_offers', 'Drivers per request', 'How many nearest drivers receive each request.', '1', false]
+    ['commission_percent', 'Commission per trip (%)', 'Percentage plan: taken from each trip fare. Required before trips of this type can complete.', '0.01', true, false, 0],
+    ['subscription_fee', 'Monthly subscription fee (Rs.)', 'Subscription plan: flat fee billed at month end. Required if a driver of this type uses it.', '0.01', true, false, 0],
+    ['credit_limit', 'Credit limit (Rs.)', 'A driver is blocked when the unpaid amount goes above this. Leave empty for no limit.', '0.01', true, false, 0],
+    ['payment_days', 'Payment days', 'Days a driver has to pay after a statement is issued.', '1', false, true, 0],
+    ['grace_days', 'Grace days', 'Extra days after the due date before the driver is blocked.', '1', false, true, 0],
+    ['search_radius_m', 'Search radius (metres)', 'How far from the pickup to look for drivers.', '100', false, true, 100],
+    ['offer_timeout_s', 'Request timeout (seconds)', 'Time drivers have to accept before the request shows "no drivers".', '5', false, true, 10],
+    ['max_offers', 'Drivers per request', 'How many nearest drivers receive each request.', '1', false, true, 1]
   ];
-  el.innerHTML = `<div class="bar"><h1>Billing settings</h1></div>
-    <form id="s" class="form card">
-      ${F.map(([k, label, hint, step]) => `<label>${label}<input name="${k}" type="number" step="${step}" min="0" value="${esc(data[k] ?? '')}" ${isAdmin() ? '' : 'disabled'}><span class="hint">${hint}</span></label>`).join('')}
-      ${isAdmin() ? '<button class="primary" type="submit">Save settings</button>' : ''}
-    </form>`;
-  $('#s').onsubmit = async e => {
-    e.preventDefault();
-    const patch = {};
-    F.forEach(([k, , , , nullable]) => {
-      const v = e.target[k].value.trim();
-      patch[k] = v === '' ? (nullable ? null : data[k]) : Number(v);
-    });
-    const { error } = await sb.from('billing_settings').update(patch).eq('id', true);
-    if (error) return err(error);
-    toast('Settings saved');
+  const dis = isAdmin() ? '' : 'disabled';
+  el.innerHTML = `<div class="bar"><h1>Billing settings</h1>${isAdmin() ? '<button class="primary" id="saveAll">Save all</button>' : ''}</div>
+    <p class="muted">Every value is set separately for each vehicle type. Commission, search radius, request timeout and drivers per request apply to trips of that vehicle type. Subscription fee, credit limit, payment days and grace days apply to drivers of that vehicle type (a driver is billed under their first active vehicle).</p>
+    ${missing.length ? `<p class="err">No settings found for: ${missing.map(v => esc(VEHICLES[v])).join(', ')}. Run the latest migration script in Supabase, then reload this page.</p>` : ''}
+    <div class="tw"><table class="settings"><thead><tr><th>Setting</th>${vehicles.map(v => `<th>${esc(VEHICLES[v])}</th>`).join('')}</tr></thead><tbody>
+    ${F.map(([k, label, hint, step]) => `<tr><td><b>${label}</b><div class="muted">${hint}</div></td>${vehicles.map(v => byVehicle[v]
+      ? `<td><input data-v="${v}" data-k="${k}" type="number" step="${step}" min="0" value="${esc(byVehicle[v][k] ?? '')}" ${dis}></td>`
+      : '<td class="muted">-</td>').join('')}</tr>`).join('')}
+    </tbody></table></div>`;
+
+  const saveBtn = $('#saveAll');
+  if (!saveBtn) return;
+  saveBtn.onclick = async () => {
+    const patches = {};
+    for (const v of vehicles) {
+      if (!byVehicle[v]) continue;
+      const patch = {};
+      for (const [k, label, , , nullable, whole, least] of F) {
+        const raw = el.querySelector(`input[data-v="${v}"][data-k="${k}"]`).value.trim();
+        if (raw === '') {
+          if (nullable) patch[k] = null;
+          else return toast(`${label} for ${VEHICLES[v]} cannot be empty`, true);
+          continue;
+        }
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n < least) return toast(`${label} for ${VEHICLES[v]} must be ${least} or more`, true);
+        if (whole && !Number.isInteger(n)) return toast(`${label} for ${VEHICLES[v]} must be a whole number`, true);
+        if (k === 'commission_percent' && n > 100) return toast(`Commission for ${VEHICLES[v]} cannot be more than 100%`, true);
+        patch[k] = n;
+      }
+      patches[v] = patch;
+    }
+    saveBtn.disabled = true;
+    try {
+      const results = await Promise.all(Object.entries(patches).map(([v, patch]) =>
+        sb.from('billing_settings').update(patch).eq('vehicle', v)));
+      const failed = results.find(r => r.error);
+      if (failed) return err(failed.error);
+      toast('Settings saved for all vehicle types');
+    } finally { saveBtn.disabled = false; }
   };
 }
 
