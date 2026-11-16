@@ -108,3 +108,9 @@ dd { margin: 0; overflow-wrap: anywhere; }
   main { padding: .9rem; }
   dl { grid-template-columns: 1fr; }
 }
+
+.settings td, .settings th { vertical-align: top; }
+.settings td:first-child { min-width: 260px; max-width: 320px; }
+.settings td:first-child .muted { margin-top: .15rem; }
+.settings input { width: 7rem; }
+.settings th:not(:first-child) { white-space: nowrap; }
